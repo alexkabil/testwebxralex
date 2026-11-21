@@ -1,0 +1,16 @@
+{
+    "name": "webxr-arena",
+    "version": "1.0.0",
+    "description": "Serveur local WebXR multi-joueurs (Quest 3 / Pico 4) avec supervision",
+    "main": "server.js",
+    "scripts": {
+      "start": "node server.js"
+    },
+    "license": "MIT",
+    "dependencies": {
+      "express": "^5.3.0",
+      "three": "^0.160.1",
+      "selfsigned": "^2.4.1",
+      "ws": "^8.23.0"
+    }
+  }

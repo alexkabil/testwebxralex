@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>WebXR Arena — casque</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b1020; color: #e8ecf8;
+               font-family: system-ui, sans-serif; overflow: hidden; }
+  #hud { position: fixed; top: 10px; left: 10px; z-index: 10; background: rgba(10,14,30,.78);
+         border: 1px solid #2a3358; border-radius: 10px; padding: 10px 14px; max-width: 320px; }
+  #hud h1 { font-size: 15px; margin: 0 0 6px; }
+  #me { font-size: 13px; display: flex; align-items: center; gap: 8px; }
+  #chip { width: 16px; height: 16px; border-radius: 50%; background: #888; display: inline-block;
+          border: 2px solid #fff3; }
+  #status { font-size: 12px; margin-top: 6px; color: #9fb0e8; }
+  #count { font-size: 12px; margin-top: 2px; color: #9fb0e8; }
+  #vrBtn { margin-top: 8px; font-size: 14px; padding: 9px 14px; border-radius: 8px; border: 0;
+           background: #2979ff; color: #fff; cursor: pointer; width: 100%; }
+  #vrBtn:disabled { background: #3a4468; color: #8b96bd; cursor: default; }
+  canvas { display: block; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js", "three/addons/controls/OrbitControls.js": "./vendor/OrbitControls.js" } }
+</script>
+</head>
+<body>
+<div id="hud">
+  <h1>WebXR Arena</h1>
+  <div id="me"><span id="chip"></span><span id="myid">connexion…</span></div>
+  <div id="status">WebSocket : …</div>
+  <div id="count">0 joueur en ligne</div>
+  <button id="vrBtn" disabled>Entrer en VR</button>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { makeAvatar, makeHand, lerpPose } from './avatar.js';
+
+const $ = (id) => document.getElementById(id);
+const statusEl = $('status'), countEl = $('count'), myIdEl = $('myid'), chipEl = $('chip'), vrBtn = $('vrBtn');
+
+// ---------- Scène ----------
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b1020);
+scene.fog = new THREE.Fog(0x0b1020, 12, 40);
+
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 100);
+camera.position.set(0, 1.6, 3);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.xr.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x1a2340, 1.1));
+const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+sun.position.set(4, 8, 3);
+scene.add(sun);
+
+const grid = new THREE.GridHelper(20, 20, 0x3d5afe, 0x223055);
+scene.add(grid);
+
+const pillarMat = new THREE.MeshStandardMaterial({ roughness: 0.6 });
+[[3, 0, -3, 0xff5252], [-3, 0, -3, 0x40c4ff], [3, 0, 3, 0x69f0ae], [-3, 0, 3, 0xffd740]].forEach(([x, y, z, c]) => {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(0.5, 2.4, 0.5), pillarMat.clone());
+  m.material.color.setHex(c);
+  m.position.set(x, 1.2, z);
+  scene.add(m);
+});
+
+let controls = null;
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---------- Joueurs distants ----------
+const remotes = new Map(); // id -> { color, avatar, hands: Map(hand->mesh), target }
+
+function ensureRemote(id, color) {
+  let r = remotes.get(id);
+  if (r) return r;
+  const { group } = makeAvatar(color, id);
+  group.visible = false;
+  scene.add(group);
+  r = { id, color, group, hands: new Map(), target: null };
+  remotes.set(id, r);
+  return r;
+}
+
+function removeRemote(id) {
+  const r = remotes.get(id);
+  if (!r) return;
+  scene.remove(r.group);
+  for (const h of r.hands.values()) scene.remove(h);
+  remotes.delete(id);
+}
+
+function updateCount() {
+  const n = remotes.size + (myId ? 1 : 0);
+  countEl.textContent = `${n} joueur${n > 1 ? 's' : ''} en ligne`;
+}
+
+// ---------- WebSocket ----------
+let ws = null;
+let myId = null;
+let myColor = null;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws?role=player`);
+
+  ws.onopen = () => statusEl.textContent = 'WebSocket : connecté';
+  ws.onclose = () => {
+    statusEl.textContent = 'WebSocket : déconnecté, reconnexion…';
+    for (const id of [...remotes.keys()]) removeRemote(id);
+    updateCount();
+    setTimeout(connect, 2000);
+  };
+  ws.onerror = () => statusEl.textContent = 'WebSocket : erreur';
+
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    if (msg.type === 'welcome') {
+      myId = msg.id;
+      myColor = msg.color;
+      myIdEl.textContent = `Moi : ${myId}`;
+      chipEl.style.background = myColor;
+      for (const p of msg.players) ensureRemote(p.id, p.color);
+      if (msg.players.length) {
+        const p0 = msg.players[msg.players.length - 1];
+        const r = ensureRemote(p0.id, p0.color);
+        r.target = { head: p0.head, controllers: p0.controllers };
+      }
+      updateCount();
+    } else if (msg.type === 'join') {
+      ensureRemote(msg.id, msg.color);
+      updateCount();
+    } else if (msg.type === 'leave') {
+      removeRemote(msg.id);
+      updateCount();
+    } else if (msg.type === 'player') {
+      const r = ensureRemote(msg.id, msg.color);
+      r.target = { head: msg.head, controllers: msg.controllers };
+      r.group.visible = !!msg.head;
+    }
+  };
+}
+connect();
+
+// ---------- Session WebXR ----------
+let session = null;
+let refSpace = null;
+const controllerViz = []; // groupes visuels des contrôleurs locaux
+
+async function enterVR() {
+  if (!navigator.xr) return;
+  try {
+    const ok = await navigator.xr.isSessionSupported('immersive-vr');
+    if (!ok) { statusEl.textContent = 'immersive-vr non supporté sur ce navigateur'; return; }
+    session = await navigator.xr.requestSession('immersive-vr', {
+      optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking']
+    });
+    await renderer.xr.setReferenceSpaceType('local-floor');
+    await renderer.xr.setSession(session);
+    refSpace = await session.requestReferenceSpace('local-floor');
+    session.addEventListener('end', onSessionEnd);
+    vrBtn.disabled = true;
+    vrBtn.textContent = 'Session VR active';
+    statusEl.textContent = 'WebSocket : connecté — VR active';
+    if (controls) controls.enabled = false;
+  } catch (e) {
+    statusEl.textContent = 'Erreur VR : ' + e.message;
+  }
+}
+
+function onSessionEnd() {
+  session = null;
+  refSpace = null;
+  for (const g of controllerViz) scene.remove(g);
+  controllerViz.length = 0;
+  vrBtn.disabled = false;
+  vrBtn.textContent = 'Entrer en VR';
+  if (controls) controls.enabled = true;
+}
+
+vrBtn.addEventListener('click', enterVR);
+
+if (navigator.xr) {
+  navigator.xr.isSessionSupported('immersive-vr').then((ok) => {
+    if (ok) { vrBtn.disabled = false; vrBtn.textContent = 'Entrer en VR'; }
+    else {
+      vrBtn.disabled = true;
+      vrBtn.textContent = 'VR non disponible (ouvrir en HTTPS depuis le casque)';
+      controls = new OrbitControls(camera, renderer.domElement);
+      controls.target.set(0, 1, 0);
+    }
+  });
+} else {
+  vrBtn.disabled = true;
+  vrBtn.textContent = 'WebXR absent (page ouverte hors casque / en HTTP)';
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(0, 1, 0);
+}
+
+// ---------- Envoi de l'état ----------
+const SEND_HZ = 20;
+let sendAcc = 0;
+const handGeo = new THREE.SphereGeometry(0.05, 12, 8);
+const ctrlMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x888888, emissiveIntensity: 0.4 });
+
+function sendState(dt) {
+  sendAcc += dt;
+  if (sendAcc < 1 / SEND_HZ || !ws || ws.readyState !== 1 || !myId) return;
+  sendAcc = 0;
+
+  let head;
+  const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  cam.updateMatrixWorld(true);
+  const hp = new THREE.Vector3(), hq = new THREE.Quaternion();
+  cam.getWorldPosition(hp);
+  cam.getWorldQuaternion(hq);
+  head = { p: [+hp.x.toFixed(3), +hp.y.toFixed(3), +hp.z.toFixed(3)],
+           q: [+hq.x.toFixed(4), +hq.y.toFixed(4), +hq.z.toFixed(4), +hq.w.toFixed(4)] };
+
+  const controllers = [];
+  if (session && refSpace) {
+    for (const src of session.inputSources) {
+      if (!src.gripSpace) continue;
+      const pose = src.gripSpace.getPose(refSpace);
+      if (!pose) continue;
+      const m = pose.transform.matrix;
+      const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+      new THREE.Matrix4().fromArray(m).decompose(p, q, s);
+      controllers.push({
+        hand: src.handedness,
+        p: [+p.x.toFixed(3), +p.y.toFixed(3), +p.z.toFixed(3)],
+        q: [+q.x.toFixed(4), +q.y.toFixed(4), +q.z.toFixed(4), +q.w.toFixed(4)]
+      });
+
+      let viz = src._viz;
+      if (!viz) {
+        viz = new THREE.Group();
+        viz.add(new THREE.Mesh(handGeo, ctrlMat));
+        scene.add(viz);
+        src._viz = viz;
+        controllerViz.push(viz);
+      }
+      viz.matrix.fromArray(m);
+      viz.matrix.decompose(viz.position, viz.quaternion, viz.scale);
+      viz.visible = true;
+    }
+  }
+
+  ws.send(JSON.stringify({ type: 'state', head, controllers }));
+}
+
+// ---------- Boucle ----------
+const clock = new THREE.Clock();
+const K = 0.25;
+
+renderer.setAnimationLoop(() => {
+  const dt = clock.getDelta();
+
+  for (const r of remotes.values()) {
+    const t = r.target;
+    if (t && t.head) lerpPose(r.group, t.head.p, t.head.q, K);
+    if (t) {
+      for (const c of t.controllers || []) {
+        let h = r.hands.get(c.hand);
+        if (!h) { h = makeHand(r.color); scene.add(h); r.hands.set(c.hand, h); }
+        lerpPose(h, c.p, c.q, K);
+        h.visible = true;
+      }
+    }
+  }
+
+  sendState(dt);
+  if (controls) controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
