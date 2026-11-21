@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WebXR Arena — supervision serveur</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b1020; color: #e8ecf8;
+               font-family: system-ui, sans-serif; overflow: hidden; }
+  #side { position: fixed; top: 0; right: 0; width: 300px; height: 100%; box-sizing: border-box;
+          background: rgba(10,14,30,.92); border-left: 1px solid #2a3358; padding: 12px; overflow-y: auto; }
+  #side h1 { font-size: 15px; margin: 0 0 4px; }
+  #status { font-size: 12px; color: #9fb0e8; margin-bottom: 10px; }
+  .pl { border: 1px solid #2a3358; border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; font-size: 12px; }
+  .pl .row1 { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .chip { width: 14px; height: 14px; border-radius: 50%; display: inline-block; border: 2px solid #fff3; }
+  .pl .pos { color: #9fb0e8; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .pl .age { color: #67e8f9; float: right; font-weight: 400; }
+  #map { width: 100%; border: 1px solid #2a3358; border-radius: 8px; background: #070a16; margin-top: 6px; }
+  #mapTitle { font-size: 12px; color: #9fb0e8; margin: 10px 0 4px; }
+  canvas { display: block; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js", "three/addons/controls/OrbitControls.js": "./vendor/OrbitControls.js" } }
+</script>
+</head>
+<body>
+<div id="side">
+  <h1>Supervision — WebXR Arena</h1>
+  <div id="status">WebSocket : …</div>
+  <div id="list"></div>
+  <div id="mapTitle">Vue de dessus (X/Z)</div>
+  <canvas id="map" width="276" height="276"></canvas>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { makeAvatar, makeHand, lerpPose } from './avatar.js';
+
+const statusEl = document.getElementById('status');
+const listEl = document.getElementById('list');
+const mapCanvas = document.getElementById('map');
+const mapCtx = mapCanvas.getContext('2d');
+
+// ---------- Scène 3D ----------
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b1020);
+const camera = new THREE.PerspectiveCamera(60, (innerWidth - 300) / innerHeight, 0.05, 200);
+camera.position.set(7, 7, 7);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth - 300, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 1, 0);
+
+scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x1a2340, 1.2));
+const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+sun.position.set(4, 8, 3);
+scene.add(sun);
+scene.add(new THREE.GridHelper(20, 20, 0x3d5afe, 0x223055));
+scene.add(new THREE.AxesHelper(1));
+
+addEventListener('resize', () => {
+  camera.aspect = (innerWidth - 300) / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth - 300, innerHeight);
+});
+
+// ---------- Joueurs ----------
+const remotes = new Map(); // id -> { color, group, hands: Map, target, lastSeen, el, posEl }
+
+function ensureRemote(id, color) {
+  let r = remotes.get(id);
+  if (r) return r;
+  const { group } = makeAvatar(color, id);
+  group.visible = false;
+  scene.add(group);
+
+  const el = document.createElement('div');
+  el.className = 'pl';
+  el.innerHTML = `<div class="row1"><span class="chip" style="background:${color}"></span><span>${id}</span><span class="age"></span></div><div class="pos">—</div>`;
+  listEl.appendChild(el);
+
+  r = { id, color, group, hands: new Map(), target: null, lastSeen: 0, el, posEl: el.querySelector('.pos'), ageEl: el.querySelector('.age') };
+  remotes.set(id, r);
+  return r;
+}
+
+function removeRemote(id) {
+  const r = remotes.get(id);
+  if (!r) return;
+  scene.remove(r.group);
+  for (const h of r.hands.values()) scene.remove(h);
+  r.el.remove();
+  remotes.delete(id);
+}
+
+// ---------- WebSocket ----------
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws?role=monitor`);
+  ws.onopen = () => statusEl.textContent = `WebSocket : connecté — ${remotes.size} joueur(s)`;
+  ws.onclose = () => { statusEl.textContent = 'WebSocket : déconnecté, reconnexion…'; setTimeout(connect, 2000); };
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    if (msg.type === 'welcome') {
+      for (const id of [...remotes.keys()]) removeRemote(id);
+      for (const p of msg.players) {
+        const r = ensureRemote(p.id, p.color);
+        r.target = { head: p.head, controllers: p.controllers };
+        r.lastSeen = p.lastSeen || Date.now();
+        r.group.visible = !!p.head;
+      }
+      statusEl.textContent = `WebSocket : connecté — ${remotes.size} joueur(s)`;
+    } else if (msg.type === 'join') {
+      ensureRemote(msg.id, msg.color);
+      statusEl.textContent = `WebSocket : connecté — ${remotes.size} joueur(s)`;
+    } else if (msg.type === 'leave') {
+      removeRemote(msg.id);
+      statusEl.textContent = `WebSocket : connecté — ${remotes.size} joueur(s)`;
+    } else if (msg.type === 'player') {
+      const r = ensureRemote(msg.id, msg.color);
+      r.target = { head: msg.head, controllers: msg.controllers };
+      r.lastSeen = msg.ts || Date.now();
+      r.group.visible = !!msg.head;
+    }
+  };
+}
+connect();
+
+// ---------- Boucle ----------
+const clock = new THREE.Clock();
+const K = 0.25;
+const MAP_RANGE = 10; // mètres, demi-côté de la minimap
+
+function drawMap() {
+  const w = mapCanvas.width, h = mapCanvas.height;
+  mapCtx.fillStyle = '#070a16';
+  mapCtx.fillRect(0, 0, w, h);
+  mapCtx.strokeStyle = '#223055';
+  mapCtx.strokeRect(0.5, 0.5, w - 1, h - 1);
+  const toMap = (x, z) => [w / 2 + (x / MAP_RANGE) * (w / 2), h / 2 - (z / MAP_RANGE) * (h / 2)];
+  for (const r of remotes.values()) {
+    if (!r.target || !r.target.head) continue;
+    const [mx, my] = toMap(r.target.head.p[0], r.target.head.p[2]);
+    mapCtx.fillStyle = r.color;
+    mapCtx.beginPath();
+    mapCtx.arc(mx, my, 6, 0, Math.PI * 2);
+    mapCtx.fill();
+    mapCtx.fillStyle = '#e8ecf8';
+    mapCtx.font = '10px sans-serif';
+    mapCtx.textAlign = 'center';
+    mapCtx.fillText(r.id, mx, my - 9);
+    for (const c of r.target.controllers || []) {
+      const [cx, cy] = toMap(c.p[0], c.p[2]);
+      mapCtx.beginPath();
+      mapCtx.arc(cx, cy, 3, 0, Math.PI * 2);
+      mapCtx.fill();
+    }
+  }
+}
+
+renderer.setAnimationLoop(() => {
+  const dt = clock.getDelta();
+  const now = Date.now();
+  for (const r of remotes.values()) {
+    const t = r.target;
+    if (t && t.head) {
+      lerpPose(r.group, t.head.p, t.head.q, K);
+      r.posEl.textContent = `tête (${t.head.p.map((v) => v.toFixed(2)).join(', ')}) — ${t.controllers?.length || 0} contrôleur(s)`;
+    }
+    r.ageEl.textContent = `${((now - r.lastSeen) / 1000).toFixed(1)}s`;
+    if (t) {
+      for (const c of t.controllers || []) {
+        let hm = r.hands.get(c.hand);
+        if (!hm) { hm = makeHand(r.color); scene.add(hm); r.hands.set(c.hand, hm); }
+        lerpPose(hm, c.p, c.q, K);
+        hm.visible = true;
+      }
+    }
+  }
+  drawMap();
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
