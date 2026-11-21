@@ -29,17 +29,20 @@
   <h1>Supervision — WebXR Arena</h1>
   <div id="status">WebSocket : …</div>
   <div id="list"></div>
-  <div id="mapTitle">Vue de dessus (X/Z)</div>
+  <div id="mapTitle">Objets interactifs</div>
+  <div id="objList"></div>
+  <div id="mapTitle" style="margin-top:14px">Vue de dessus (X/Z)</div>
   <canvas id="map" width="276" height="276"></canvas>
 </div>
 
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { makeAvatar, makeHand, lerpPose } from './avatar.js';
+import { makeAvatar, makeHand, makeInteractiveObject, lerpPose } from './avatar.js';
 
 const statusEl = document.getElementById('status');
 const listEl = document.getElementById('list');
+const objListEl = document.getElementById('objList');
 const mapCanvas = document.getElementById('map');
 const mapCtx = mapCanvas.getContext('2d');
 
@@ -71,7 +74,7 @@ addEventListener('resize', () => {
 });
 
 // ---------- Joueurs ----------
-const remotes = new Map(); // id -> { color, group, hands: Map, target, lastSeen, el, posEl }
+const remotes = new Map();
 
 function ensureRemote(id, color) {
   let r = remotes.get(id);
@@ -99,6 +102,28 @@ function removeRemote(id) {
   remotes.delete(id);
 }
 
+// ---------- Objets interactifs ----------
+const interactives = new Map();
+
+function applyObjectState(o) {
+  let r = interactives.get(o.id);
+  if (!r) {
+    const built = makeInteractiveObject(o.p || [0, 1.2, -1], o.id);
+    scene.add(built.group);
+    const el = document.createElement('div');
+    el.className = 'pl';
+    objListEl.appendChild(el);
+    r = { ...built, owner: null, hoveredBy: new Set(), el };
+    interactives.set(o.id, r);
+  }
+  r.owner = o.owner || null;
+  r.hoveredBy = new Set(o.hoveredBy || []);
+  if (o.p) r.group.position.set(o.p[0], o.p[1], o.p[2]);
+  r.mesh.material.color.set(r.owner ? r.owner.color : 0x9aa0b5);
+  r.setLabel(r.owner ? r.owner.id : 'libre', r.owner ? r.owner.color : '#9aa0b5');
+  r.el.innerHTML = `<div class="row1"><span class="chip" style="background:${r.owner ? r.owner.color : '#9aa0b5'}"></span><span>${o.id}</span><span class="age">${r.hoveredBy.size} survol(s)</span></div><div class="pos">${r.owner ? 'propriétaire : ' + r.owner.id : 'libre'}</div>`;
+}
+
 // ---------- WebSocket ----------
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -110,6 +135,7 @@ function connect() {
     try { msg = JSON.parse(ev.data); } catch { return; }
     if (msg.type === 'welcome') {
       for (const id of [...remotes.keys()]) removeRemote(id);
+      for (const o of msg.objects || []) applyObjectState(o);
       for (const p of msg.players) {
         const r = ensureRemote(p.id, p.color);
         r.target = { head: p.head, controllers: p.controllers };
@@ -128,6 +154,8 @@ function connect() {
       r.target = { head: msg.head, controllers: msg.controllers };
       r.lastSeen = msg.ts || Date.now();
       r.group.visible = !!msg.head;
+    } else if (msg.type === 'object') {
+      applyObjectState(msg);
     }
   };
 }
@@ -136,7 +164,7 @@ connect();
 // ---------- Boucle ----------
 const clock = new THREE.Clock();
 const K = 0.25;
-const MAP_RANGE = 10; // mètres, demi-côté de la minimap
+const MAP_RANGE = 10;
 
 function drawMap() {
   const w = mapCanvas.width, h = mapCanvas.height;
@@ -163,6 +191,13 @@ function drawMap() {
       mapCtx.fill();
     }
   }
+  for (const o of interactives.values()) {
+    const [ox, oy] = toMap(o.group.position.x, o.group.position.z);
+    mapCtx.fillStyle = o.owner ? o.owner.color : '#9aa0b5';
+    mapCtx.fillRect(ox - 5, oy - 5, 10, 10);
+    mapCtx.strokeStyle = '#0b1020';
+    mapCtx.strokeRect(ox - 5, oy - 5, 10, 10);
+  }
 }
 
 renderer.setAnimationLoop(() => {
@@ -183,6 +218,12 @@ renderer.setAnimationLoop(() => {
         hm.visible = true;
       }
     }
+  }
+  for (const o of interactives.values()) {
+    const hovered = o.hoveredBy.size > 0;
+    const target = hovered ? 1.15 : 1;
+    o.group.scale.setScalar(o.group.scale.x + (target - o.group.scale.x) * 0.3);
+    o.mesh.material.emissive.set(hovered ? (o.owner ? o.owner.color : 0xffffff) : 0x000000);
   }
   drawMap();
   controls.update();

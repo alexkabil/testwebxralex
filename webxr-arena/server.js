@@ -15,43 +15,69 @@ const CERT_FILE = path.join(CERT_DIR, 'server.crt');
 const KEY_FILE = path.join(CERT_DIR, 'server.key');
 
 function ensureSelfSignedCert() {
-    if (fs.existsSync(CERT_FILE) && fs.existsSync(KEY_FILE)) return true;
-    fs.mkdirSync(CERT_DIR, { recursive: true });
-    try {
-      execSync(
-        `openssl req -x509 -newkey rsa:2048 -nodes -keyout "${KEY_FILE}" -out "${CERT_FILE}" -days 825 -subj "/CN=webxr-arena.local" -addext "subjectAltName=DNS:webxr-arena.local,IP:127.0.0.1"`,
-        { stdio: 'pipe' }
-      );
-      console.log('[cert] certificat auto-signé généré dans ./certs via openssl (WebXR exige HTTPS ou localhost)');
-      return true;
-    } catch {}
-    try {
-      const selfsigned = require('selfsigned');
-      const pems = selfsigned.generate(
-        [{ name: 'commonName', value: 'webxr-arena.local' }],
-        {
-          days: 825,
-          keySize: 2048,
-          extensions: [
-            { name: 'subjectAltName', altNames: [{ type: 2, value: 'webxr-arena.local' }, { type: 7, ip: '127.0.0.1' }] }
-          ]
-        }
-      );
-      fs.writeFileSync(KEY_FILE, pems.private);
-      fs.writeFileSync(CERT_FILE, pems.cert);
-      console.log('[cert] certificat auto-signé généré dans ./certs via selfsigned (openssl absent) — WebXR exige HTTPS ou localhost');
-      return true;
-    } catch (e) {
-      console.warn('[cert] impossible de générer un certificat auto-signé :', e.message);
-      return false;
-    }
+  if (fs.existsSync(CERT_FILE) && fs.existsSync(KEY_FILE)) return true;
+  fs.mkdirSync(CERT_DIR, { recursive: true });
+  try {
+    execSync(
+      `openssl req -x509 -newkey rsa:2048 -nodes -keyout "${KEY_FILE}" -out "${CERT_FILE}" -days 825 -subj "/CN=webxr-arena.local" -addext "subjectAltName=DNS:webxr-arena.local,IP:127.0.0.1"`,
+      { stdio: 'pipe' }
+    );
+    console.log('[cert] certificat auto-signé généré dans ./certs via openssl (WebXR exige HTTPS ou localhost)');
+    return true;
+  } catch {}
+  try {
+    const selfsigned = require('selfsigned');
+    const pems = selfsigned.generate(
+      [{ name: 'commonName', value: 'webxr-arena.local' }],
+      {
+        days: 825,
+        keySize: 2048,
+        extensions: [
+          { name: 'subjectAltName', altNames: [{ type: 2, value: 'webxr-arena.local' }, { type: 7, ip: '127.0.0.1' }] }
+        ]
+      }
+    );
+    fs.writeFileSync(KEY_FILE, pems.private);
+    fs.writeFileSync(CERT_FILE, pems.cert);
+    console.log('[cert] certificat auto-signé généré dans ./certs via selfsigned (openssl absent) — WebXR exige HTTPS ou localhost');
+    return true;
+  } catch (e) {
+    console.warn('[cert] impossible de générer un certificat auto-signé :', e.message);
+    return false;
   }
+}
 
 const PALETTE = [
   '#ff5252', '#ff9800', '#ffeb3b', '#8bc34a', '#00e676', '#00e5ff',
   '#2979ff', '#651fff', '#d500f9', '#ff4081', '#ffee58', '#69f0ae',
   '#40c4ff', '#e040fb', '#ff6e40', '#18ffff'
 ];
+
+const OBJECTS = [
+  { id: 'obj1', p: [1.5, 1.2, -1.5] },
+  { id: 'obj2', p: [-1.5, 1.2, -1.5] },
+  { id: 'obj3', p: [0, 1.5, -2.6] },
+  { id: 'obj4', p: [2.2, 1.2, 0.6] },
+  { id: 'obj5', p: [-2.2, 1.2, 0.6] }
+];
+const objectState = new Map(OBJECTS.map((o) => [o.id, { id: o.id, p: o.p, owner: null, hoveredBy: new Set() }]));
+
+function objectSnapshot() {
+  return [...objectState.values()].map((o) => ({ id: o.id, p: o.p, owner: o.owner, hoveredBy: [...o.hoveredBy] }));
+}
+
+function broadcastObject(o) {
+  broadcast({ type: 'object', id: o.id, p: o.p, owner: o.owner, hoveredBy: [...o.hoveredBy] });
+}
+
+function releasePlayer(id) {
+  for (const o of objectState.values()) {
+    let changed = false;
+    if (o.owner && o.owner.id === id) { o.owner = null; changed = true; }
+    if (o.hoveredBy.delete(id)) changed = true;
+    if (changed) broadcastObject(o);
+  }
+}
 
 const players = new Map(); // id -> { id, color, ws, head, controllers, lastSeen }
 const monitors = new Set();
@@ -92,7 +118,7 @@ function attachWs(wss) {
 
     if (role === 'monitor') {
       monitors.add(ws);
-      send(ws, { type: 'welcome', role: 'monitor', players: snapshot() });
+      send(ws, { type: 'welcome', role: 'monitor', players: snapshot(), objects: objectSnapshot() });
       ws.on('close', () => monitors.delete(ws));
       return;
     }
@@ -102,7 +128,7 @@ function attachWs(wss) {
     const player = { id, color, ws, head: null, controllers: [], lastSeen: Date.now() };
     players.set(id, player);
 
-    send(ws, { type: 'welcome', role: 'player', id, color, players: snapshot().filter((p) => p.id !== id) });
+    send(ws, { type: 'welcome', role: 'player', id, color, players: snapshot().filter((p) => p.id !== id), objects: objectSnapshot() });
     broadcast({ type: 'join', id, color }, id);
     console.log(`[join] ${id} (${color}) — ${players.size} joueur(s) en ligne`);
 
@@ -114,6 +140,21 @@ function attachWs(wss) {
         player.controllers = Array.isArray(msg.controllers) ? msg.controllers : [];
         player.lastSeen = Date.now();
         broadcast({ type: 'player', id, color, head: player.head, controllers: player.controllers, ts: player.lastSeen }, id);
+    } else if (msg.type === 'select') {
+        const o = objectState.get(msg.objectId);
+        if (o) {
+          o.owner = o.owner && o.owner.id === id ? null : { id, color };
+          broadcastObject(o);
+          console.log(`[select] ${id} ${o.owner ? 'a sélectionné' : 'a désélectionné'} ${o.id}`);
+        }
+      } else if (msg.type === 'hover') {
+        const target = objectState.get(msg.objectId) || null;
+        for (const o of objectState.values()) {
+          const had = o.hoveredBy.delete(id);
+          const now = target && o.id === target.id;
+          if (now) o.hoveredBy.add(id);
+          if (had || now) broadcastObject(o);
+        }
       } else if (msg.type === 'ping') {
         send(ws, { type: 'pong', ts: Date.now() });
       }
@@ -121,6 +162,7 @@ function attachWs(wss) {
 
     ws.on('close', () => {
       players.delete(id);
+      releasePlayer(id);
       broadcast({ type: 'leave', id });
       console.log(`[leave] ${id} — ${players.size} joueur(s) en ligne`);
     });
@@ -169,6 +211,7 @@ setInterval(() => {
     if (now - p.lastSeen > 15000 && p.ws.readyState === 1) {
       p.ws.terminate();
       players.delete(id);
+      releasePlayer(id);
       broadcast({ type: 'leave', id });
       console.log(`[timeout] ${id}`);
     }

@@ -54,3 +54,40 @@ export function lerpPose(obj, p, q, k) {
   obj.position.lerp(_v, k);
   obj.quaternion.slerp(_q, k);
 }
+
+export function makeInteractiveObject(p, id) {
+  const group = new THREE.Group();
+  group.position.set(p[0], p[1], p[2]);
+  group.userData.objectId = id;
+
+  const mesh = new THREE.Mesh(
+    new THREE.TorusKnotGeometry(0.16, 0.055, 64, 10),
+    new THREE.MeshStandardMaterial({ color: 0x9aa0b5, roughness: 0.35, metalness: 0.3, emissive: 0x000000, emissiveIntensity: 0.4 })
+  );
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  const tex = new THREE.CanvasTexture(canvas);
+  const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
+  label.scale.set(0.6, 0.15, 1);
+  label.position.y = 0.42;
+
+  function setLabel(text, color) {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.beginPath();
+    ctx.roundRect(4, 4, 248, 56, 12);
+    ctx.fill();
+    ctx.fillStyle = color;
+    ctx.font = 'bold 30px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`${id} — ${text}`, 128, 34);
+    tex.needsUpdate = true;
+  }
+  setLabel('libre', '#9aa0b5');
+
+  group.add(mesh, label);
+  return { group, mesh, label, setLabel };
+}

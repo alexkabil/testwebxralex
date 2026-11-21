@@ -15,6 +15,7 @@
           border: 2px solid #fff3; }
   #status { font-size: 12px; margin-top: 6px; color: #9fb0e8; }
   #count { font-size: 12px; margin-top: 2px; color: #9fb0e8; }
+  #msg { font-size: 12px; margin-top: 6px; color: #ffd740; min-height: 15px; }
   #vrBtn { margin-top: 8px; font-size: 14px; padding: 9px 14px; border-radius: 8px; border: 0;
            background: #2979ff; color: #fff; cursor: pointer; width: 100%; }
   #vrBtn:disabled { background: #3a4468; color: #8b96bd; cursor: default; }
@@ -30,13 +31,14 @@
   <div id="me"><span id="chip"></span><span id="myid">connexion…</span></div>
   <div id="status">WebSocket : …</div>
   <div id="count">0 joueur en ligne</div>
+  <div id="msg"></div>
   <button id="vrBtn" disabled>Entrer en VR</button>
 </div>
 
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { makeAvatar, makeHand, lerpPose } from './avatar.js';
+import { makeAvatar, makeHand, makeInteractiveObject, lerpPose } from './avatar.js';
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $('status'), countEl = $('count'), myIdEl = $('myid'), chipEl = $('chip'), vrBtn = $('vrBtn');
@@ -48,6 +50,9 @@ scene.fog = new THREE.Fog(0x0b1020, 12, 40);
 
 const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 100);
 camera.position.set(0, 1.6, 3);
+const dolly = new THREE.Group();
+dolly.add(camera);
+scene.add(dolly);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
@@ -62,6 +67,10 @@ scene.add(sun);
 
 const grid = new THREE.GridHelper(20, 20, 0x3d5afe, 0x223055);
 scene.add(grid);
+
+const groundMesh = new THREE.Mesh(new THREE.PlaneGeometry(19, 19), new THREE.MeshBasicMaterial({ visible: false }));
+groundMesh.rotation.x = -Math.PI / 2;
+scene.add(groundMesh);
 
 const pillarMat = new THREE.MeshStandardMaterial({ roughness: 0.6 });
 [[3, 0, -3, 0xff5252], [-3, 0, -3, 0x40c4ff], [3, 0, 3, 0x69f0ae], [-3, 0, 3, 0xffd740]].forEach(([x, y, z, c]) => {
@@ -79,7 +88,7 @@ addEventListener('resize', () => {
 });
 
 // ---------- Joueurs distants ----------
-const remotes = new Map(); // id -> { color, avatar, hands: Map(hand->mesh), target }
+const remotes = new Map();
 
 function ensureRemote(id, color) {
   let r = remotes.get(id);
@@ -103,6 +112,40 @@ function removeRemote(id) {
 function updateCount() {
   const n = remotes.size + (myId ? 1 : 0);
   countEl.textContent = `${n} joueur${n > 1 ? 's' : ''} en ligne`;
+}
+
+// ---------- Objets interactifs ----------
+const interactives = new Map();
+const msgEl = $('msg');
+
+function applyObjectState(r, o) {
+  r.owner = o.owner || null;
+  r.hoveredBy = new Set(o.hoveredBy || []);
+  if (o.p) r.group.position.set(o.p[0], o.p[1], o.p[2]);
+  r.mesh.material.color.set(r.owner ? r.owner.color : 0x9aa0b5);
+  r.setLabel(r.owner ? r.owner.id : 'libre', r.owner ? r.owner.color : '#9aa0b5');
+  if (r.owner) msgEl.textContent = `${o.id} sélectionné par ${r.owner.id}`;
+  else if (msgEl.textContent.includes(o.id)) msgEl.textContent = `${o.id} désélectionné`;
+}
+
+function ensureInteractive(o) {
+  let r = interactives.get(o.id);
+  if (r) { applyObjectState(r, o); return r; }
+  const built = makeInteractiveObject(o.p || [0, 1.2, -1], o.id);
+  scene.add(built.group);
+  r = { ...built, owner: null, hoveredBy: new Set() };
+  interactives.set(o.id, r);
+  applyObjectState(r, o);
+  return r;
+}
+
+function findInteractive(obj) {
+  let n = obj;
+  while (n) {
+    if (n.userData.objectId) return n.userData.objectId;
+    n = n.parent;
+  }
+  return null;
 }
 
 // ---------- WebSocket ----------
@@ -132,6 +175,7 @@ function connect() {
       myIdEl.textContent = `Moi : ${myId}`;
       chipEl.style.background = myColor;
       for (const p of msg.players) ensureRemote(p.id, p.color);
+      for (const o of msg.objects || []) ensureInteractive(o);
       if (msg.players.length) {
         const p0 = msg.players[msg.players.length - 1];
         const r = ensureRemote(p0.id, p0.color);
@@ -148,15 +192,21 @@ function connect() {
       const r = ensureRemote(msg.id, msg.color);
       r.target = { head: msg.head, controllers: msg.controllers };
       r.group.visible = !!msg.head;
+    } else if (msg.type === 'object') {
+      ensureInteractive(msg);
     }
   };
+}
+
+function send(m) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(m));
 }
 connect();
 
 // ---------- Session WebXR ----------
 let session = null;
 let refSpace = null;
-const controllerViz = []; // groupes visuels des contrôleurs locaux
+const controllerViz = [];
 
 async function enterVR() {
   if (!navigator.xr) return;
@@ -170,6 +220,22 @@ async function enterVR() {
     await renderer.xr.setSession(session);
     refSpace = await session.requestReferenceSpace('local-floor');
     session.addEventListener('end', onSessionEnd);
+    session.addEventListener('selectstart', (e) => {
+      const src = e.source;
+      if (!src) return;
+      if (src._hovered) {
+        send({ type: 'select', objectId: src._hovered });
+      } else if (src._teleport) {
+        camera.updateMatrixWorld(true);
+        const hw = new THREE.Vector3();
+        camera.getWorldPosition(hw);
+        dolly.position.set(
+          src._teleport.x - (hw.x - dolly.position.x),
+          0,
+          src._teleport.z - (hw.z - dolly.position.z)
+        );
+      }
+    });
     vrBtn.disabled = true;
     vrBtn.textContent = 'Session VR active';
     statusEl.textContent = 'WebSocket : connecté — VR active';
@@ -208,6 +274,72 @@ if (navigator.xr) {
   controls.target.set(0, 1, 0);
 }
 
+// ---------- Interaction objets (rayon contrôleurs / souris) ----------
+const raycaster = new THREE.Raycaster();
+const mouseNDC = new THREE.Vector2(-10, -10);
+let localHover = null;
+const _pm = new THREE.Matrix4(), _pv = new THREE.Vector3(), _pq = new THREE.Quaternion(), _ps = new THREE.Vector3(), _dir = new THREE.Vector3();
+const _up = new THREE.Vector3(0, 1, 0), _move = new THREE.Vector3();
+
+addEventListener('pointermove', (e) => {
+  mouseNDC.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+});
+renderer.domElement.addEventListener('pointerdown', () => {
+  if (!renderer.xr.isPresenting && localHover) send({ type: 'select', objectId: localHover });
+});
+
+const keys = new Set();
+addEventListener('keydown', (e) => {
+  keys.add(e.code);
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+});
+addEventListener('keyup', (e) => keys.delete(e.code));
+
+function updateHover() {
+  const groups = [...interactives.values()].map((r) => r.group);
+  let hit = null;
+  if (renderer.xr.isPresenting && session && refSpace) {
+    for (const src of session.inputSources) {
+      if (!src.targetRaySpace) { src._hovered = null; src._teleport = null; continue; }
+      const pose = src.targetRaySpace.getPose(refSpace);
+      if (!pose) { src._hovered = null; src._teleport = null; continue; }
+      _pm.fromArray(pose.transform.matrix);
+      _pm.decompose(_pv, _pq, _ps);
+      _dir.set(0, 0, -1).applyQuaternion(_pq);
+      raycaster.set(_pv, _dir);
+      const hits = raycaster.intersectObjects(groups, true);
+      src._hovered = hits.length ? findInteractive(hits[0].object) : null;
+      if (!hit && src._hovered) hit = src._hovered;
+
+      let tp = null;
+      if (!src._hovered) {
+        const g = raycaster.intersectObject(groundMesh);
+        if (g.length && Math.abs(g[0].point.x) <= 9.5 && Math.abs(g[0].point.z) <= 9.5) tp = g[0].point;
+      }
+      src._teleport = tp;
+
+      if (!src._marker) {
+        src._marker = new THREE.Mesh(
+          new THREE.RingGeometry(0.12, 0.18, 32),
+          new THREE.MeshBasicMaterial({ color: 0x40c4ff, transparent: true, opacity: 0.9, side: THREE.DoubleSide })
+        );
+        src._marker.rotation.x = -Math.PI / 2;
+        scene.add(src._marker);
+      }
+      src._marker.visible = !!tp;
+      if (tp) src._marker.position.set(tp.x, 0.02, tp.z);
+    }
+  } else {
+    raycaster.setFromCamera(mouseNDC, camera);
+    const hits = raycaster.intersectObjects(groups, true);
+    hit = hits.length ? findInteractive(hits[0].object) : null;
+  }
+  if (hit !== localHover) {
+    localHover = hit;
+    send({ type: 'hover', objectId: localHover });
+  }
+}
+
 // ---------- Envoi de l'état ----------
 const SEND_HZ = 20;
 let sendAcc = 0;
@@ -220,7 +352,7 @@ function sendState(dt) {
   sendAcc = 0;
 
   let head;
-  const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  const cam = camera;
   cam.updateMatrixWorld(true);
   const hp = new THREE.Vector3(), hq = new THREE.Quaternion();
   cam.getWorldPosition(hp);
@@ -257,7 +389,7 @@ function sendState(dt) {
     }
   }
 
-  ws.send(JSON.stringify({ type: 'state', head, controllers }));
+  send({ type: 'state', head, controllers });
 }
 
 // ---------- Boucle ----------
@@ -278,6 +410,33 @@ renderer.setAnimationLoop(() => {
         h.visible = true;
       }
     }
+  }
+
+  updateHover();
+
+  if (!renderer.xr.isPresenting && controls) {
+    const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 6 : 3;
+    _dir.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    _dir.y = 0;
+    if (_dir.lengthSq() > 0) _dir.normalize();
+    _pv.crossVectors(_dir, _up);
+    _move.set(0, 0, 0);
+    if (keys.has('KeyW') || keys.has('ArrowUp')) _move.add(_dir);
+    if (keys.has('KeyS') || keys.has('ArrowDown')) _move.sub(_dir);
+    if (keys.has('KeyD') || keys.has('ArrowRight')) _move.add(_pv);
+    if (keys.has('KeyA') || keys.has('ArrowLeft')) _move.sub(_pv);
+    if (_move.lengthSq() > 0) {
+      _move.normalize().multiplyScalar(speed * dt);
+      camera.position.add(_move);
+      controls.target.add(_move);
+    }
+  }
+
+  for (const r of interactives.values()) {
+    const hovered = localHover === r.group.userData.objectId || r.hoveredBy.size > 0;
+    const target = hovered ? 1.15 : 1;
+    r.group.scale.lerp(_ps.set(target, target, target), 0.3);
+    r.mesh.material.emissive.set(hovered ? (r.owner ? r.owner.color : 0xffffff) : 0x000000);
   }
 
   sendState(dt);
