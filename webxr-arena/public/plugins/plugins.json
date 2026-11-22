@@ -1,6 +1,7 @@
 [
     "exemple-identite.js",
     "journal.js",
+    "config-local.js",
     "marqueurs.js",
-    "config-local.js"
+    "ui3d-config.js"
   ]

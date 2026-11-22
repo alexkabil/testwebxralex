@@ -216,6 +216,8 @@ const ctx = {
   send,
   getMyId: () => myId,
   getMyColor: () => myColor,
+  getSession: () => session,
+  getRefSpace: () => refSpace,
   remotes,
   interactives,
   userConfig,
@@ -241,7 +243,8 @@ async function enterVR() {
     const ok = await navigator.xr.isSessionSupported('immersive-vr');
     if (!ok) { statusEl.textContent = 'immersive-vr non supporté sur ce navigateur'; return; }
     session = await navigator.xr.requestSession('immersive-vr', {
-      optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking']
+      optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
+      domOverlay: { root: document.getElementById('hud') }
     });
     await renderer.xr.setReferenceSpaceType('local-floor');
     await renderer.xr.setSession(session);
