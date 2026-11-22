@@ -9,9 +9,10 @@ const p1 = new WebSocket('ws://localhost:8080/ws?role=player');
 const p2 = new WebSocket('ws://localhost:8080/ws?role=player');
 
 let welcome1 = null, welcome2 = null, welcomeM = null;
+let gotSelect3OnP2 = null;
+let gotAppOnP2 = null;
 let gotPlayerOnP2 = null, gotPlayerOnM = null, gotLeaveOnP2 = null;
-let gotSelectOnP2 = null, gotSelectOnM = null, gotHoverOnP2 = null, gotUnhoverOnP2 = null, gotReleaseOnP2 = null;
-let gotSelect3OnP2 = null, gotDeselectOnP2 = null;
+let gotSelectOnP2 = null, gotSelectOnM = null, gotHoverOnP2 = null, gotUnhoverOnP2 = null, gotReleaseOnP2 = null, gotDeselectOnP2 = null;
 
 monitor.on('message', (d) => {
   const m = JSON.parse(d);
@@ -25,13 +26,14 @@ p2.on('message', (d) => {
   if (m.type === 'welcome') welcome2 = m;
   if (m.type === 'player' && m.id === welcome1?.id) gotPlayerOnP2 = m;
   if (m.type === 'leave' && m.id === welcome1?.id) gotLeaveOnP2 = m;
+  if (m.type === 'app' && m.data && m.data.kind === 'chat') gotAppOnP2 = m;
   if (m.type === 'object') {
     if (m.id === 'obj1' && m.owner && m.owner.id === welcome1?.id) gotSelectOnP2 = m;
     if (m.id === 'obj1' && m.owner === null && gotSelectOnP2) gotReleaseOnP2 = m;
     if (m.id === 'obj2' && m.hoveredBy.includes(welcome1?.id)) gotHoverOnP2 = m;
     if (m.id === 'obj2' && !m.hoveredBy.includes(welcome1?.id) && gotHoverOnP2) gotUnhoverOnP2 = m;
-    if (m.id === 'obj3' && m.owner && m.owner.id === welcome1?.id) gotSelect3OnP2 = m;
     if (m.id === 'obj3' && m.owner === null && gotSelect3OnP2) gotDeselectOnP2 = m;
+    if (m.id === 'obj3' && m.owner && m.owner.id === welcome1?.id) gotSelect3OnP2 = m;
   }
 });
 
@@ -54,8 +56,9 @@ setTimeout(() => {
     ]
   }));
   p1.send(JSON.stringify({ type: 'select', objectId: 'obj1' }));
-  p1.send(JSON.stringify({ type: 'hover', objectId: 'obj2' }));
   p1.send(JSON.stringify({ type: 'select', objectId: 'obj3' }));
+  p1.send(JSON.stringify({ type: 'hover', objectId: 'obj2' }));
+  p1.send(JSON.stringify({ type: 'app', data: { kind: 'chat', text: 'salut' } }));
 }, 300);
 
 setTimeout(() => {
@@ -72,15 +75,18 @@ setTimeout(() => {
   console.log('OK select relayé au moniteur');
   if (!gotHoverOnP2) fail('p2 n a pas reçu le hover de obj2');
   console.log('OK hover obj2 relayé à p2, hoveredBy:', JSON.stringify(gotHoverOnP2.hoveredBy));
+  if (!gotAppOnP2) fail('p2 n a pas reçu le message app (chat)');
+  if (gotAppOnP2.from !== welcome1.id || gotAppOnP2.data.text !== 'salut') fail('relai app incorrect');
+  console.log('OK relai générique app -> p2:', gotAppOnP2.from, JSON.stringify(gotAppOnP2.data));
   p1.send(JSON.stringify({ type: 'hover', objectId: null }));
   p1.send(JSON.stringify({ type: 'select', objectId: 'obj3' })); // re-clic = désélection
 }, 800);
 
 setTimeout(() => {
   if (!gotUnhoverOnP2) fail('p2 n a pas reçu la fin de hover');
+  console.log('OK fin de hover relayée (hoveredBy vide)');
   if (!gotDeselectOnP2) fail('p2 n a pas reçu la désélection de obj3');
   console.log('OK re-clic sur obj3 = désélection (owner = null) relayée à p2');
-  console.log('OK fin de hover relayée (hoveredBy vide)');
   p1.close();
 }, 1100);
 
@@ -92,6 +98,18 @@ setTimeout(async () => {
   const api = await fetch('http://localhost:8080/api/players').then((r) => r.json());
   if (!api.players.some((p) => p.id === welcome2.id)) fail('api/players ne contient pas p2');
   console.log('OK /api/players:', api.players.map((p) => p.id).join(', '));
+
+  const up = await fetch('http://localhost:8080/users/upload?uid=e2e-test', { method: 'POST', body: 'export default { hoverScale: 9 };' });
+  const uj = await up.json();
+  if (!uj.ok) fail('upload refusé: ' + JSON.stringify(uj));
+  const g = await fetch('http://localhost:8080/users/e2e-test.js');
+  const gt = await g.text();
+  if (g.status !== 200 || !gt.includes('hoverScale: 9')) fail('fichier uploadé non servi: ' + g.status);
+  console.log('OK upload config utilisateur -> POST /users/upload?uid=e2e-test -> servi sur /users/e2e-test.js');
+  const bad = await fetch('http://localhost:8080/users/upload?uid=../evil', { method: 'POST', body: 'x' });
+  if (bad.status !== 400) fail('uid non sanitizé accepté !');
+  console.log('OK uid malveillant rejeté (400)');
+
   console.log('\nTOUS LES TESTS PASSENT');
   process.exit(0);
 }, 1800);

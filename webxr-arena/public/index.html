@@ -39,9 +39,16 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { makeAvatar, makeHand, makeInteractiveObject, lerpPose } from './avatar.js';
+import { loadUserConfig, loadPlugins } from './plugins/loader.js';
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $('status'), countEl = $('count'), myIdEl = $('myid'), chipEl = $('chip'), vrBtn = $('vrBtn');
+
+const userConfig = await loadUserConfig();
+if (userConfig.hudTheme === 'light') {
+  $('hud').style.background = 'rgba(240,242,250,.92)';
+  $('hud').style.color = '#10142a';
+}
 
 // ---------- Scène ----------
 const scene = new THREE.Scene();
@@ -195,12 +202,32 @@ function connect() {
     } else if (msg.type === 'object') {
       ensureInteractive(msg);
     }
+    for (const p of plugins) if (p.onMessage) p.onMessage(msg, ctx);
   };
 }
 
 function send(m) {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify(m));
 }
+
+// ---------- Config utilisateur + plugins (aucune modif serveur requise) ----------
+const ctx = {
+  THREE, scene, renderer, camera, dolly,
+  send,
+  getMyId: () => myId,
+  getMyColor: () => myColor,
+  remotes,
+  interactives,
+  userConfig,
+  addPanel(title) {
+    const p = document.createElement('div');
+    p.style.cssText = 'margin-top:8px;border-top:1px solid #2a3358;padding-top:6px;font-size:12px;';
+    p.innerHTML = `<b>${title}</b><div class="body"></div>`;
+    $('hud').appendChild(p);
+    return p.querySelector('.body');
+  }
+};
+const plugins = await loadPlugins(ctx);
 connect();
 
 // ---------- Session WebXR ----------
@@ -399,6 +426,8 @@ const K = 0.25;
 renderer.setAnimationLoop(() => {
   const dt = clock.getDelta();
 
+  for (const p of plugins) if (p.onFrame) p.onFrame(dt, ctx);
+
   for (const r of remotes.values()) {
     const t = r.target;
     if (t && t.head) lerpPose(r.group, t.head.p, t.head.q, K);
@@ -434,9 +463,9 @@ renderer.setAnimationLoop(() => {
 
   for (const r of interactives.values()) {
     const hovered = localHover === r.group.userData.objectId || r.hoveredBy.size > 0;
-    const target = hovered ? 1.15 : 1;
+    const target = hovered ? (userConfig.hoverScale || 1.15) : 1;
     r.group.scale.lerp(_ps.set(target, target, target), 0.3);
-    r.mesh.material.emissive.set(hovered ? (r.owner ? r.owner.color : 0xffffff) : 0x000000);
+    r.mesh.material.emissive.set(hovered ? (r.owner ? r.owner.color : (userConfig.hoverColor || 0xffffff)) : 0x000000);
   }
 
   sendState(dt);

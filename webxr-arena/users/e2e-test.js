@@ -1,0 +1,1 @@
+export default { hoverScale: 9 };

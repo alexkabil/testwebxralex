@@ -140,7 +140,7 @@ function attachWs(wss) {
         player.controllers = Array.isArray(msg.controllers) ? msg.controllers : [];
         player.lastSeen = Date.now();
         broadcast({ type: 'player', id, color, head: player.head, controllers: player.controllers, ts: player.lastSeen }, id);
-    } else if (msg.type === 'select') {
+      } else if (msg.type === 'select') {
         const o = objectState.get(msg.objectId);
         if (o) {
           o.owner = o.owner && o.owner.id === id ? null : { id, color };
@@ -157,6 +157,8 @@ function attachWs(wss) {
         }
       } else if (msg.type === 'ping') {
         send(ws, { type: 'pong', ts: Date.now() });
+      } else if (msg.type === 'app') {
+        broadcast({ type: 'app', from: id, color, data: msg.data }, id);
       }
     });
 
@@ -172,6 +174,17 @@ function attachWs(wss) {
 
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
+app.use('/users', express.static(path.join(__dirname, 'users')));
+
+const ALLOWED_UID = /^[a-zA-Z0-9_-]{1,32}$/;
+app.post('/users/upload', express.text({ type: '*/*', limit: '256kb' }), (req, res) => {
+  const uid = String(req.query.uid || '');
+  if (!ALLOWED_UID.test(uid)) return res.status(400).json({ error: 'uid invalide (a-z A-Z 0-9 _ - , 32 max)' });
+  fs.mkdirSync(path.join(__dirname, 'users'), { recursive: true });
+  fs.writeFileSync(path.join(__dirname, 'users', uid + '.js'), req.body);
+  console.log(`[config] ${uid}.js uploadé (${req.body.length} octets)`);
+  res.json({ ok: true, uid, file: `/users/${uid}.js` });
+});
 
 app.get('/api/players', (req, res) => {
   res.json({ now: Date.now(), players: snapshot() });

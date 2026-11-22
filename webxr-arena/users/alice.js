@@ -1,0 +1,1 @@
+export default { hoverScale: 1.4, hoverColor: '#00ff88', hudTheme: 'dark' };
