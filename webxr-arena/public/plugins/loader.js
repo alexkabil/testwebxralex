@@ -9,30 +9,23 @@ export async function loadUserConfig() {
 
   const cfg = { uid, hoverScale: 1.15, hoverColor: '#ffffff', hudTheme: 'dark' };
   try {
-    const mod = await import(`/users/${encodeURIComponent(uid)}.js`);
-    Object.assign(cfg, mod.default || {});
+    const res = await fetch(`/users/${encodeURIComponent(uid)}.js`);
+    if (res.ok) {
+      const text = await res.text();
+      if (text.trim().startsWith('{')) {
+        Object.assign(cfg, JSON.parse(text));
+      } else {
+        const blobUrl = URL.createObjectURL(new Blob([text], { type: 'text/javascript' }));
+        try {
+          const mod = await import(blobUrl);
+          Object.assign(cfg, mod.default || {});
+        } finally {
+          URL.revokeObjectURL(blobUrl);
+        }
+      }
+    }
   } catch {}
   for (const k of NUMERIC_KEYS) if (params.get(k) !== null) cfg[k] = parseFloat(params.get(k));
   for (const k of STRING_KEYS) if (params.get(k) !== null) cfg[k] = params.get(k);
   return cfg;
-}
-
-export async function loadPlugins(ctx) {
-  const plugins = [];
-  let list = [];
-  try {
-    list = await (await fetch('./plugins/plugins.json')).json();
-  } catch {
-    return plugins;
-  }
-  for (const name of list) {
-    try {
-      const mod = await import(`/plugins/${name}`);
-      if (mod.activate) mod.activate(ctx);
-      plugins.push(mod);
-    } catch (e) {
-      console.error('[plugin] échec du chargement de', name, e);
-    }
-  }
-  return plugins;
 }

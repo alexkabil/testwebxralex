@@ -270,6 +270,12 @@ async function enterVR() {
     vrBtn.textContent = 'Session VR active';
     statusEl.textContent = 'WebSocket : connecté — VR active';
     if (controls) controls.enabled = false;
+    const xrOpts = { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] };
+    try {
+      session = await navigator.xr.requestSession('immersive-vr', { ...xrOpts, domOverlay: { root: document.getElementById('hud') } });
+    } catch {
+      session = await navigator.xr.requestSession('immersive-vr', xrOpts);
+    }
   } catch (e) {
     statusEl.textContent = 'Erreur VR : ' + e.message;
   }

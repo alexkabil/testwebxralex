@@ -1,7 +1,7 @@
 [
+    "debug.js",
     "exemple-identite.js",
     "journal.js",
     "config-local.js",
-    "marqueurs.js",
     "ui3d-config.js"
   ]
