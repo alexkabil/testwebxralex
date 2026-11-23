@@ -23,9 +23,29 @@ export async function loadUserConfig() {
           URL.revokeObjectURL(blobUrl);
         }
       }
-    }
-  } catch {}
+    } 
+  }
+  catch {}
   for (const k of NUMERIC_KEYS) if (params.get(k) !== null) cfg[k] = parseFloat(params.get(k));
   for (const k of STRING_KEYS) if (params.get(k) !== null) cfg[k] = params.get(k);
   return cfg;
 }
+export async function loadPlugins(ctx) {
+    const plugins = [];
+    let list = [];
+    try {
+      list = await (await fetch('./plugins/plugins.json')).json();
+    } catch {
+      return plugins;
+    }
+    for (const name of list) {
+      try {
+        const mod = await import(`/plugins/${name}`);
+        if (mod.activate) mod.activate(ctx);
+        plugins.push(mod);
+      } catch (e) {
+        console.error('[plugin] échec du chargement de', name, e);
+      }
+    }
+    return plugins;
+  }

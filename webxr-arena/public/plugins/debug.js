@@ -12,7 +12,7 @@ export function activate(ctx) {
     window.addEventListener('unhandledrejection', (e) => push('PROMISE REJETÉE: ' + ((e.reason && e.reason.message) || e.reason)));
     ctx._debugBody = ctx.addPanel('Debug');
     push('debug actif (uid=' + (ctx.userConfig.uid || 'default') + ', WebXR=' + ('xr' in navigator) + ')');
-    ctx._lastSession = ctx.getSession ? ctx.getSession() : null;
+    ctx._lastSession = null;
   }
   
   export function onFrame(dt, ctx) {

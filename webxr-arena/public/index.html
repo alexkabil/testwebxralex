@@ -211,6 +211,9 @@ function send(m) {
 }
 
 // ---------- Config utilisateur + plugins (aucune modif serveur requise) ----------
+let session = null;
+let refSpace = null;
+
 const ctx = {
   THREE, scene, renderer, camera, dolly,
   send,
@@ -233,8 +236,6 @@ const plugins = await loadPlugins(ctx);
 connect();
 
 // ---------- Session WebXR ----------
-let session = null;
-let refSpace = null;
 const controllerViz = [];
 
 async function enterVR() {
@@ -242,10 +243,12 @@ async function enterVR() {
   try {
     const ok = await navigator.xr.isSessionSupported('immersive-vr');
     if (!ok) { statusEl.textContent = 'immersive-vr non supporté sur ce navigateur'; return; }
-    session = await navigator.xr.requestSession('immersive-vr', {
-      optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
-      domOverlay: { root: document.getElementById('hud') }
-    });
+    const xrOpts = { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] };
+    try {
+      session = await navigator.xr.requestSession('immersive-vr', { ...xrOpts, domOverlay: { root: document.getElementById('hud') } });
+    } catch {
+      session = await navigator.xr.requestSession('immersive-vr', xrOpts);
+    }
     await renderer.xr.setReferenceSpaceType('local-floor');
     await renderer.xr.setSession(session);
     refSpace = await session.requestReferenceSpace('local-floor');
@@ -270,12 +273,6 @@ async function enterVR() {
     vrBtn.textContent = 'Session VR active';
     statusEl.textContent = 'WebSocket : connecté — VR active';
     if (controls) controls.enabled = false;
-    const xrOpts = { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] };
-    try {
-      session = await navigator.xr.requestSession('immersive-vr', { ...xrOpts, domOverlay: { root: document.getElementById('hud') } });
-    } catch {
-      session = await navigator.xr.requestSession('immersive-vr', xrOpts);
-    }
   } catch (e) {
     statusEl.textContent = 'Erreur VR : ' + e.message;
   }
