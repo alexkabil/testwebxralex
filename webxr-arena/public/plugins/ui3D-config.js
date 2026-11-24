@@ -110,9 +110,10 @@ export function activate(ctx) {
 
   function pickSrc(src) {
     const rs = ctx.getRefSpace && ctx.getRefSpace();
-    if (!src.targetRaySpace || typeof src.targetRaySpace.getPose !== 'function' || !rs) return null;
+    const space = src.targetRaySpace || src.gripSpace;
+    if (!space || typeof space.getPose !== 'function' || !rs) return null;
     try {
-      const pose = src.targetRaySpace.getPose(rs);
+      const pose = space.getPose(rs);
       if (!pose) return null;
       _m.fromArray(pose.transform.matrix);
       _m.decompose(_p, _q, _s);

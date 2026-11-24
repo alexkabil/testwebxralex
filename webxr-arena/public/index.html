@@ -333,8 +333,14 @@ const _up = new THREE.Vector3(0, 1, 0), _move = new THREE.Vector3();
 addEventListener('pointermove', (e) => {
   mouseNDC.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
 });
-renderer.domElement.addEventListener('pointerdown', () => {
-  if (!renderer.xr.isPresenting && localHover) send({ type: 'select', objectId: localHover });
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (renderer.xr.isPresenting) return;
+  mouseNDC.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  raycaster.setFromCamera(mouseNDC, camera);
+  const groups = [...interactives.values()].map((r) => r.group);
+  const hits = raycaster.intersectObjects(groups, true);
+  const id = hits.length ? findInteractive(hits[0].object) : null;
+  if (id) send({ type: 'select', objectId: id });
 });
 
 const keys = new Set();
@@ -349,14 +355,14 @@ function updateHover() {
   let hit = null;
   if (renderer.xr.isPresenting && session && refSpace) {
     for (const src of session.inputSources) {
-      if (!src.targetRaySpace || typeof src.targetRaySpace.getPose !== 'function') {
+      const space = src.targetRaySpace || src.gripSpace;
+      if (!space || typeof space.getPose !== 'function') {
         src._hovered = null; src._teleport = null;
         if (src._rayLine) src._rayLine.visible = false;
         continue;
       }
       let pose = null;
-      try { pose = src.targetRaySpace.getPose(refSpace); } catch { pose = null; }
-      if (!pose) { src._hovered = null; src._teleport = null; if (src._rayLine) src._rayLine.visible = false; continue; }
+      try { pose = space.getPose(refSpace); } catch { pose = null; }      if (!pose) { src._hovered = null; src._teleport = null; if (src._rayLine) src._rayLine.visible = false; continue; }
       _pm.fromArray(pose.transform.matrix);
       _pm.decompose(_pv, _pq, _ps);
       _dir.set(0, 0, -1).applyQuaternion(_pq);
