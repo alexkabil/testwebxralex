@@ -13,6 +13,8 @@ export function activate(ctx) {
     ctx._debugBody = ctx.addPanel('Debug');
     push('debug actif (uid=' + (ctx.userConfig.uid || 'default') + ', WebXR=' + ('xr' in navigator) + ')');
     ctx._lastSession = null;
+    ctx._lastPresenting = false;
+    ctx._frames = 0;
   }
   
   export function onFrame(dt, ctx) {
@@ -24,8 +26,32 @@ export function activate(ctx) {
         window.__pushDebug('session immersive-vr démarrée');
         s.addEventListener('end', () => window.__pushDebug('session terminée (end)'));
         s.addEventListener('visibilitychange', () => window.__pushDebug('visibilité: ' + s.visibilityState));
+        if (!ctx._testSphere) {
+          const m = new ctx.THREE.Mesh(
+            new ctx.THREE.SphereGeometry(0.3, 24, 16),
+            new ctx.THREE.MeshBasicMaterial({ color: 0x00ff00 })
+          );
+          m.position.set(0, 1.6, -2);
+          ctx.scene.add(m);
+          ctx._testSphere = m;
+          window.__pushDebug('sphère test VERTE ajoutée en (0,1.6,-2)');
+        }
       } else {
         window.__pushDebug('session quittée');
       }
+    }
+    ctx._frames++;
+    const pres = ctx.renderer.xr.isPresenting;
+    if (pres !== ctx._lastPresenting) {
+      ctx._lastPresenting = pres;
+      window.__pushDebug('presenting=' + pres);
+    }
+    if (pres && s && ctx._frames % 90 === 0) {
+      const info = [...s.inputSources].map((x) =>
+        `${x.handedness || '?'}:${x.targetRaySpace ? 'trs' : '-'}${x.gripSpace ? '+grip' : ''}${x.gamepad ? '+gp' : ''}`).join(' ');
+      window.__pushDebug(`inputs[${s.inputSources.length}]: ${info || '(aucun)'}`);
+    }
+    if (ctx._frames % 120 === 0) {
+      window.__pushDebug(`rendu: ${ctx.renderer.info.render.calls} appels dessin/frame, presenting=${pres}`);
     }
   }

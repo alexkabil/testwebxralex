@@ -267,9 +267,10 @@ async function enterVR() {
     refSpace = await session.requestReferenceSpace('local-floor');
     dbg('refSpace ok — VR prête');
     session.addEventListener('end', onSessionEnd);
-    session.addEventListener('selectstart', (e) => {
+    const onSelect = (e, isEnd) => {
       const src = e.source;
       if (!src) return;
+      if (isEnd && src._selStartAt && performance.now() - src._selStartAt < 400) return;
       if (src._hovered) {
         send({ type: 'select', objectId: src._hovered });
       } else if (src._teleport) {
@@ -282,7 +283,9 @@ async function enterVR() {
           src._teleport.z - (hw.z - dolly.position.z)
         );
       }
-    });
+    };
+    session.addEventListener('selectstart', (e) => { if (e.source) e.source._selStartAt = performance.now(); onSelect(e, false); });
+    session.addEventListener('selectend', (e) => onSelect(e, true));
     vrBtn.disabled = true;
     vrBtn.textContent = 'Session VR active';
     statusEl.textContent = 'WebSocket : connecté — VR active';
@@ -362,7 +365,8 @@ function updateHover() {
         continue;
       }
       let pose = null;
-      try { pose = space.getPose(refSpace); } catch { pose = null; }      if (!pose) { src._hovered = null; src._teleport = null; if (src._rayLine) src._rayLine.visible = false; continue; }
+      try { pose = space.getPose(refSpace); } catch { pose = null; }
+      if (!pose) { src._hovered = null; src._teleport = null; if (src._rayLine) src._rayLine.visible = false; continue; }
       _pm.fromArray(pose.transform.matrix);
       _pm.decompose(_pv, _pq, _ps);
       _dir.set(0, 0, -1).applyQuaternion(_pq);
