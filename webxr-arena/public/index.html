@@ -32,6 +32,7 @@
   <div id="status">WebSocket : …</div>
   <div id="count">0 joueur en ligne</div>
   <div id="msg"></div>
+  <div id="help" style="font-size:11px;margin-top:6px;color:#67e8f9;">VR : gâchette = sélectionner / téléporter — stick G = déplacer — stick D = tourner</div>
   <button id="vrBtn" disabled>Entrer en VR</button>
 </div>
 
@@ -139,6 +140,8 @@ function ensureInteractive(o) {
   let r = interactives.get(o.id);
   if (r) { applyObjectState(r, o); return r; }
   const built = makeInteractiveObject(o.p || [0, 1.2, -1], o.id);
+  const hit = new THREE.Mesh(new THREE.SphereGeometry(0.35, 12, 8), new THREE.MeshBasicMaterial({ visible: false }));
+  built.group.add(hit);
   scene.add(built.group);
   r = { ...built, owner: null, hoveredBy: new Set() };
   interactives.set(o.id, r);
@@ -237,21 +240,32 @@ connect();
 
 // ---------- Session WebXR ----------
 const controllerViz = [];
+const rayLines = [];
 
 async function enterVR() {
   if (!navigator.xr) return;
+  const t0 = performance.now();
+  const dbg = (m) => window.__pushDebug && window.__pushDebug(m + ' (+' + Math.round(performance.now() - t0) + ' ms depuis le clic)');
   try {
+    vrBtn.disabled = true;
+    vrBtn.textContent = 'VR : demande en cours…';
     const ok = await navigator.xr.isSessionSupported('immersive-vr');
-    if (!ok) { statusEl.textContent = 'immersive-vr non supporté sur ce navigateur'; return; }
+    if (!ok) { statusEl.textContent = 'immersive-vr non supporté sur ce navigateur'; dbg('immersive-vr NON supporté'); return; }
+    dbg('isSessionSupported ok');
     const xrOpts = { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] };
+    const wantOverlay = /OculusBrowser|Quest/i.test(navigator.userAgent);
     try {
-      session = await navigator.xr.requestSession('immersive-vr', { ...xrOpts, domOverlay: { root: document.getElementById('hud') } });
+      session = await navigator.xr.requestSession('immersive-vr',
+        wantOverlay ? { ...xrOpts, domOverlay: { root: document.getElementById('hud') } } : xrOpts);
     } catch {
       session = await navigator.xr.requestSession('immersive-vr', xrOpts);
     }
+    dbg('session obtenue');
     await renderer.xr.setReferenceSpaceType('local-floor');
     await renderer.xr.setSession(session);
+    dbg('setSession ok');
     refSpace = await session.requestReferenceSpace('local-floor');
+    dbg('refSpace ok — VR prête');
     session.addEventListener('end', onSessionEnd);
     session.addEventListener('selectstart', (e) => {
       const src = e.source;
@@ -283,6 +297,8 @@ function onSessionEnd() {
   refSpace = null;
   for (const g of controllerViz) scene.remove(g);
   controllerViz.length = 0;
+  for (const l of rayLines) scene.remove(l);
+  rayLines.length = 0;
   vrBtn.disabled = false;
   vrBtn.textContent = 'Entrer en VR';
   if (controls) controls.enabled = true;
@@ -333,15 +349,32 @@ function updateHover() {
   let hit = null;
   if (renderer.xr.isPresenting && session && refSpace) {
     for (const src of session.inputSources) {
-      if (!src.targetRaySpace || typeof src.targetRaySpace.getPose !== 'function') { src._hovered = null; src._teleport = null; continue; }
+      if (!src.targetRaySpace || typeof src.targetRaySpace.getPose !== 'function') {
+        src._hovered = null; src._teleport = null;
+        if (src._rayLine) src._rayLine.visible = false;
+        continue;
+      }
       let pose = null;
       try { pose = src.targetRaySpace.getPose(refSpace); } catch { pose = null; }
-      if (!pose) { src._hovered = null; src._teleport = null; continue; }      _pm.fromArray(pose.transform.matrix);
+      if (!pose) { src._hovered = null; src._teleport = null; if (src._rayLine) src._rayLine.visible = false; continue; }
+      _pm.fromArray(pose.transform.matrix);
       _pm.decompose(_pv, _pq, _ps);
       _dir.set(0, 0, -1).applyQuaternion(_pq);
+      if (!src._rayLine) {
+        const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0, -5)]);
+        src._rayLine = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0x40c4ff, transparent: true, opacity: 0.8 }));
+        scene.add(src._rayLine);
+        rayLines.push(src._rayLine);
+      }
+      src._rayLine.visible = true;
+      const rp = src._rayLine.geometry.attributes.position;
+      rp.setXYZ(0, _pv.x, _pv.y, _pv.z);
+      rp.setXYZ(1, _pv.x + _dir.x * 5, _pv.y + _dir.y * 5, _pv.z + _dir.z * 5);
+      rp.needsUpdate = true;
       raycaster.set(_pv, _dir);
       const hits = raycaster.intersectObjects(groups, true);
       src._hovered = hits.length ? findInteractive(hits[0].object) : null;
+      if (src._rayLine) src._rayLine.material.color.set(src._hovered ? 0x00ff88 : 0x40c4ff);
       if (!hit && src._hovered) hit = src._hovered;
 
       let tp = null;
@@ -449,6 +482,34 @@ renderer.setAnimationLoop(() => {
   }
 
   updateHover();
+
+  if (renderer.xr.isPresenting && session && refSpace) {
+    let mx = 0, my = 0, tx = 0;
+    for (const src of session.inputSources) {
+      const gp = src.gamepad;
+      if (!gp || !gp.axes || gp.axes.length < 2) continue;
+      if (src.handedness === 'left') { mx = gp.axes[0] || 0; my = gp.axes[1] || 0; }
+      else if (src.handedness === 'right') { tx = gp.axes.length > 2 ? (gp.axes[2] || 0) : (gp.axes[0] || 0); }
+    }
+    const dz = 0.15;
+    if (Math.abs(mx) < dz) mx = 0;
+    if (Math.abs(my) < dz) my = 0;
+    if (Math.abs(tx) < dz) tx = 0;
+    if (mx || my) {
+      camera.getWorldDirection(_dir);
+      _dir.y = 0;
+      if (_dir.lengthSq() > 0) _dir.normalize();
+      _pv.crossVectors(_dir, _up);
+      _move.set(0, 0, 0).addScaledVector(_dir, -my).addScaledVector(_pv, mx);
+      if (_move.lengthSq() > 0) {
+        _move.normalize().multiplyScalar(2.5 * dt);
+        dolly.position.add(_move);
+        dolly.position.x = Math.max(-9.5, Math.min(9.5, dolly.position.x));
+        dolly.position.z = Math.max(-9.5, Math.min(9.5, dolly.position.z));
+      }
+    }
+    if (tx) dolly.rotation.y -= tx * 1.6 * dt;
+  }
 
   if (!renderer.xr.isPresenting && controls) {
     const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 6 : 3;
