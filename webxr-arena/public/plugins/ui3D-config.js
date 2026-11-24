@@ -109,6 +109,7 @@ export function activate(ctx) {
   }
 
   function pickSrc(src) {
+    if (!src) return null;
     const rs = ctx.getRefSpace && ctx.getRefSpace();
     const space = src.targetRaySpace || src.gripSpace;
     if (!space || typeof space.getPose !== 'function' || !rs) return null;
@@ -151,6 +152,7 @@ export function onFrame(dt, ctx) {
   if (!ctx._ui3dHook) {
     ctx._ui3dHook = true;
     s.addEventListener('selectstart', (e) => {
+      if (!e.source) return;
       const b = ctx._ui3dPickSrc(e.source);
       if (b) {
         b.action();
