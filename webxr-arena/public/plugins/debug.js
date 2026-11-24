@@ -24,7 +24,10 @@ export function activate(ctx) {
       ctx._lastSession = s;
       if (s) {
         window.__pushDebug('session immersive-vr démarrée');
-        s.addEventListener('end', () => window.__pushDebug('session terminée (end)'));
+        s.addEventListener('end', () => {
+          window.__pushDebug('session terminée (end)');
+          if (ctx._testSphere) { ctx.scene.remove(ctx._testSphere); ctx._testSphere = null; }
+        });
         s.addEventListener('visibilitychange', () => window.__pushDebug('visibilité: ' + s.visibilityState));
         if (!ctx._testSphere) {
           const m = new ctx.THREE.Mesh(
@@ -46,7 +49,7 @@ export function activate(ctx) {
       ctx._lastPresenting = pres;
       window.__pushDebug('presenting=' + pres);
     }
-    if (pres && s && ctx._frames % 90 === 0) {
+    if (s && ctx._frames % 90 === 0) {
       const info = [...s.inputSources].map((x) =>
         `${x.handedness || '?'}:${x.targetRaySpace ? 'trs' : '-'}${x.gripSpace ? '+grip' : ''}${x.gamepad ? '+gp' : ''}`).join(' ');
       window.__pushDebug(`inputs[${s.inputSources.length}]: ${info || '(aucun)'}`);
