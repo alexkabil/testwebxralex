@@ -110,15 +110,19 @@ export function activate(ctx) {
 
   function pickSrc(src) {
     const rs = ctx.getRefSpace && ctx.getRefSpace();
-    if (!src.targetRaySpace || !rs) return null;
-    const pose = src.targetRaySpace.getPose(rs);
-    if (!pose) return null;
-    _m.fromArray(pose.transform.matrix);
-    _m.decompose(_p, _q, _s);
-    _d.set(0, 0, -1).applyQuaternion(_q);
-    ray.set(_p, _d);
-    const hit = ray.intersectObject(panel)[0];
-    return hit ? buttonAtUV(hit.uv) : null;
+    if (!src.targetRaySpace || typeof src.targetRaySpace.getPose !== 'function' || !rs) return null;
+    try {
+      const pose = src.targetRaySpace.getPose(rs);
+      if (!pose) return null;
+      _m.fromArray(pose.transform.matrix);
+      _m.decompose(_p, _q, _s);
+      _d.set(0, 0, -1).applyQuaternion(_q);
+      ray.set(_p, _d);
+      const hit = ray.intersectObject(panel)[0];
+      return hit ? buttonAtUV(hit.uv) : null;
+    } catch {
+      return null;
+    }
   }
 
   addEventListener('pointermove', (e) => {

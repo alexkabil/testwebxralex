@@ -333,10 +333,10 @@ function updateHover() {
   let hit = null;
   if (renderer.xr.isPresenting && session && refSpace) {
     for (const src of session.inputSources) {
-      if (!src.targetRaySpace) { src._hovered = null; src._teleport = null; continue; }
-      const pose = src.targetRaySpace.getPose(refSpace);
-      if (!pose) { src._hovered = null; src._teleport = null; continue; }
-      _pm.fromArray(pose.transform.matrix);
+      if (!src.targetRaySpace || typeof src.targetRaySpace.getPose !== 'function') { src._hovered = null; src._teleport = null; continue; }
+      let pose = null;
+      try { pose = src.targetRaySpace.getPose(refSpace); } catch { pose = null; }
+      if (!pose) { src._hovered = null; src._teleport = null; continue; }      _pm.fromArray(pose.transform.matrix);
       _pm.decompose(_pv, _pq, _ps);
       _dir.set(0, 0, -1).applyQuaternion(_pq);
       raycaster.set(_pv, _dir);
@@ -396,8 +396,9 @@ function sendState(dt) {
   const controllers = [];
   if (session && refSpace) {
     for (const src of session.inputSources) {
-      if (!src.gripSpace) continue;
-      const pose = src.gripSpace.getPose(refSpace);
+      if (!src.gripSpace || typeof src.gripSpace.getPose !== 'function') continue;
+      let pose = null;
+      try { pose = src.gripSpace.getPose(refSpace); } catch { continue; }
       if (!pose) continue;
       const m = pose.transform.matrix;
       const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
