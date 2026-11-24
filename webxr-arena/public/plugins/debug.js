@@ -3,9 +3,9 @@ export function activate(ctx) {
     window.__logs = logs;
     const push = (t) => {
       logs.push(`${new Date().toLocaleTimeString()} ${t}`);
-      if (logs.length > 60) logs.shift();
+      if (logs.length > 200) logs.shift();
       console.log('[debug]', t);
-      if (ctx._debugBody) ctx._debugBody.innerHTML = logs.slice(-12).join('<br>');
+      if (ctx._debugBody) ctx._debugBody.innerHTML = logs.slice(-18).join('<br>');
     };
     window.__pushDebug = push;
     window.addEventListener('error', (e) => push('ERREUR: ' + e.message + ' @' + String(e.filename || '').split('/').pop() + ':' + e.lineno));
@@ -39,6 +39,13 @@ export function activate(ctx) {
           ctx._testSphere = m;
           window.__pushDebug('sphère test VERTE ajoutée en (0,1.6,-2)');
         }
+        const dumpInputs = () => {
+          const info0 = [...s.inputSources].map((x) =>
+            `${x.handedness || '?'}:${x.targetRaySpace ? 'trs' : '-'}${x.gripSpace ? '+grip' : ''}${x.gamepad ? '+gp' : ''}`).join(' ');
+          window.__pushDebug(`inputs[${s.inputSources.length}]: ${info0 || '(aucun)'}`);
+        };
+        dumpInputs();
+        s.addEventListener('inputsourceschange', dumpInputs);
       } else {
         window.__pushDebug('session quittée');
       }
@@ -49,12 +56,12 @@ export function activate(ctx) {
       ctx._lastPresenting = pres;
       window.__pushDebug('presenting=' + pres);
     }
-    if (s && ctx._frames % 90 === 0) {
+    if (s && ctx._frames % 300 === 0) {
       const info = [...s.inputSources].map((x) =>
         `${x.handedness || '?'}:${x.targetRaySpace ? 'trs' : '-'}${x.gripSpace ? '+grip' : ''}${x.gamepad ? '+gp' : ''}`).join(' ');
       window.__pushDebug(`inputs[${s.inputSources.length}]: ${info || '(aucun)'}`);
     }
-    if (ctx._frames % 120 === 0) {
+    if (ctx._frames % 600 === 0) {
       window.__pushDebug(`rendu: ${ctx.renderer.info.render.calls} appels dessin/frame, presenting=${pres}`);
     }
   }
